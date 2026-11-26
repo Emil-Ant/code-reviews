@@ -10,10 +10,10 @@ try {
 
 const prisma = new PrismaClient();
 
-async function main() {
+async function seedGreetings() {
   const count = await prisma.greeting.count();
   if (count > 0) {
-    console.log(`Database already seeded (${count} greetings). Skipping.`);
+    console.log(`Greetings already seeded (${count}). Skipping.`);
     return;
   }
 
@@ -26,6 +26,52 @@ async function main() {
   });
 
   console.log("Seeded 3 greetings.");
+}
+
+// Checked separately from greetings so an existing database (e.g. a persisted
+// Docker volume) still gets example views after this migration lands.
+async function seedSavedViews() {
+  const count = await prisma.savedView.count();
+  if (count > 0) {
+    console.log(`Saved views already seeded (${count}). Skipping.`);
+    return;
+  }
+
+  await prisma.savedView.createMany({
+    data: [
+      {
+        name: "G7 GDP per capita",
+        indicator: "NY.GDP.PCAP.CD",
+        year: 2023,
+        countries: "CAN,FRA,DEU,ITA,JPN,GBR,USA",
+        order: "DESC",
+        region: null,
+      },
+      {
+        name: "Life expectancy in Africa",
+        indicator: "SP.DYN.LE00.IN",
+        year: 2022,
+        countries: "NGA,ZAF,KEN,ETH,EGY",
+        order: "ASC",
+        region: "Sub-Saharan Africa",
+      },
+      {
+        name: "Population giants",
+        indicator: "SP.POP.TOTL",
+        year: 2023,
+        countries: "CHN,IND,USA,IDN,PAK,BRA",
+        order: "DESC",
+        region: "South Asia",
+      },
+    ],
+  });
+
+  console.log("Seeded 3 saved views.");
+}
+
+async function main() {
+  await seedGreetings();
+  await seedSavedViews();
 }
 
 main()

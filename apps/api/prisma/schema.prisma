@@ -64,3 +64,22 @@ model Observation {
   @@unique([countryCode, indicatorCode, year])
   @@index([indicatorCode, year])
 }
+
+/// A named dashboard configuration that anyone can save and reopen.
+/// One column per dashboard filter. No foreign key to Indicator, so a view
+/// survives re-ingestion and the dashboard can explain when its indicator is gone.
+model SavedView {
+  id        Int      @id @default(autoincrement())
+  /// Trimmed, 1-60 characters, unique (case-insensitive, enforced in the resolver)
+  name      String   @unique
+  /// World Bank indicator code, e.g. "NY.GDP.PCAP.CD"
+  indicator String
+  year      Int
+  /// Comma-separated ISO3 codes in display order, e.g. "GBR,USA,FRA"
+  countries String
+  /// "ASC" or "DESC"
+  order     String
+  /// Highlighted region on the scatter, null for none
+  region    String?
+  createdAt DateTime @default(now())
+}

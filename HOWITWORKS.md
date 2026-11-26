@@ -47,7 +47,7 @@ npm run dev                      # starts API (:4000) and web (:3000) with hot r
 cp apps/api/.env.example apps/api/.env          # DATABASE_URL, PORT, CORS_ORIGIN, WORLD_BANK_API_URL
 cp apps/web/.env.example apps/web/.env.local    # GRAPHQL_URL (server-side), NEXT_PUBLIC_GRAPHQL_URL (browser)
 npm run db:migrate               # creates apps/api/prisma/dev.db and applies migrations
-npm run db:seed                  # inserts a few greetings (safe to re-run)
+npm run db:seed                  # inserts greetings and example saved views (safe to re-run)
 npm run db:ingest                # pulls ~75k rows from the World Bank API (~10s, safe to re-run)
 ```
 
@@ -66,7 +66,7 @@ Run from the repo root:
 | `npm run typecheck`  | `tsc --noEmit` across both apps                              |
 | `npm run lint`       | ESLint for the web app                                       |
 | `npm run db:migrate` | `prisma migrate dev` (create/apply migrations locally)       |
-| `npm run db:seed`    | Seed the database with greetings                             |
+| `npm run db:seed`    | Seed the database with greetings and example saved views     |
 | `npm run db:ingest`  | Fetch World Bank data into SQLite (`-- --force` to re-fetch) |
 | `npm run db:studio`  | Open Prisma Studio to browse the SQLite data                 |
 
@@ -147,6 +147,19 @@ Every chart has a "View as table" fallback. The **year** selector defaults to th
 `latestYear` (most recent year with at least 100 countries reporting). The scatter uses the latest
 year where _both_ of its indicators are available, which may be earlier than the selected year.
 
+### Saved views
+
+The "Saved views" panel stores the current configuration under a name in the `SavedView` table
+(one column per setting; `countries` is a comma-separated list). A saved view opens at
+`/dashboard?view=<id>`, and the dashboard reads its settings from the database, not the URL.
+Changing any control leaves the view and goes back to plain URL parameters. The home page lists
+the five most recent views.
+
+Names are trimmed, 1-60 characters, and unique ignoring case. Views are not linked to the
+`Indicator` table by a foreign key, so re-ingesting data never deletes them; if a view's indicator
+is gone, the dashboard says so instead of falling back to another indicator. The seed adds three
+example views (only when the table is empty).
+
 ## GraphQL API
 
 Explore interactively in GraphiQL at http://localhost:4000/graphql. The main queries:
@@ -175,6 +188,14 @@ type Query {
   countrySnapshot(indicatorCodes: [String!]!, year: Int!): [CountrySnapshot!]!
   hello: String!
   greetings: [Greeting!]!
+  savedViews(limit: Int): [SavedView!]! # newest first
+  savedView(id: Int!): SavedView
+}
+
+type Mutation {
+  addGreeting(message: String!): Greeting!
+  createSavedView(input: SavedViewInput!): SavedView! # validation errors come back as readable messages
+  deleteSavedView(id: Int!): Boolean!
 }
 ```
 

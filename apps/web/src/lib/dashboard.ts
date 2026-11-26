@@ -42,6 +42,16 @@ export function parseParams(sp: RawSearchParams): DashboardParams {
   };
 }
 
+/** Inverse of parseParams: the query string for a dashboard configuration. */
+export function toSearchParams(p: DashboardParams): URLSearchParams {
+  const sp = new URLSearchParams({ indicator: p.indicator });
+  if (p.year != null) sp.set("year", String(p.year));
+  sp.set("countries", p.countries.join(","));
+  sp.set("order", p.order);
+  if (p.region) sp.set("region", p.region);
+  return sp;
+}
+
 // ---------------------------------------------------------------- types
 
 export type IndicatorMeta = {

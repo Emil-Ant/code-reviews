@@ -1,8 +1,14 @@
 "use client";
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback } from "react";
-import { MAX_COUNTRIES, type CountryMeta, type IndicatorMeta, type SortOrder } from "@/lib/dashboard";
+import {
+  MAX_COUNTRIES,
+  toSearchParams,
+  type CountryMeta,
+  type IndicatorMeta,
+  type SortOrder,
+} from "@/lib/dashboard";
 import { shortIndicatorName } from "@/lib/format";
 
 type Props = {
@@ -20,27 +26,30 @@ type Props = {
 };
 
 const selectClass =
-  "rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900";
+  "rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm font-medium text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100";
 
 /**
  * Every control writes to the URL query string; the server component re-renders
  * with the new parameters. Nothing is stored in component state.
+ *
+ * The URL is rebuilt from the full on-screen state rather than the current
+ * query string, because a saved view's URL only carries `?view=<id>`. Any
+ * change therefore leaves the saved view, so the "viewing" banner stays honest.
  */
 export function Controls({ indicators, countries, regions, selected, yearOptions }: Props) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
 
   const update = useCallback(
     (changes: Record<string, string | null>) => {
-      const next = new URLSearchParams(searchParams.toString());
+      const next = toSearchParams(selected);
       for (const [k, v] of Object.entries(changes)) {
         if (v === null || v === "") next.delete(k);
         else next.set(k, v);
       }
       router.replace(`${pathname}?${next.toString()}`, { scroll: false });
     },
-    [router, pathname, searchParams],
+    [router, pathname, selected],
   );
 
   const countryName = (code: string) => countries.find((c) => c.code === code)?.name ?? code;

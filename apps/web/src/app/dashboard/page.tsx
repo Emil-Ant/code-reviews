@@ -1,4 +1,5 @@
-import { Suspense } from "react";
+import { Suspense, type ReactNode } from "react";
+import Link from "next/link";
 import {
   GDP_PER_CAPITA,
   LIFE_EXPECTANCY,
@@ -6,6 +7,7 @@ import {
   fetchDashboardMeta,
   parseParams,
   toScatterPoints,
+  toSearchParams,
   type RawSearchParams,
 } from "@/lib/dashboard";
 import { formatCompact, formatIndicatorValue, shortIndicatorName } from "@/lib/format";
@@ -18,6 +20,8 @@ import { RegionBarChart } from "@/components/charts/RegionBarChart";
 import { GdpLifeScatter } from "@/components/charts/GdpLifeScatter";
 import { RankingTable } from "@/components/dashboard/RankingTable";
 import { Controls } from "@/components/dashboard/Controls";
+import { SavedViews } from "@/components/dashboard/SavedViews";
+import { fetchSavedView, fetchSavedViews, savedViewToParams, type SavedView } from "@/lib/savedViews";
 
 export const dynamic = "force-dynamic";
 
@@ -25,12 +29,25 @@ export const metadata = { title: "Dashboard · Code Reviews" };
 
 type PageProps = { searchParams: Promise<RawSearchParams> };
 
+/** `?view=<id>` as a positive integer, or null when absent or malformed. */
+function parseViewId(raw: string | string[] | undefined): number | null {
+  const v = Number(Array.isArray(raw) ? raw[0] : raw);
+  return Number.isInteger(v) && v > 0 ? v : null;
+}
+
 export default async function DashboardPage({ searchParams }: PageProps) {
-  const params = parseParams(await searchParams);
+  const sp = await searchParams;
+  const requestedViewId = sp.view === undefined ? null : parseViewId(sp.view);
 
   let meta;
+  let savedViews: SavedView[];
+  let activeView: SavedView | null = null;
   try {
-    meta = await fetchDashboardMeta();
+    [meta, savedViews, activeView] = await Promise.all([
+      fetchDashboardMeta(),
+      fetchSavedViews(),
+      requestedViewId == null ? null : fetchSavedView(requestedViewId),
+    ]);
   } catch (err) {
     return (
       <main className="mx-auto w-full max-w-6xl px-6 py-16">
@@ -42,8 +59,34 @@ export default async function DashboardPage({ searchParams }: PageProps) {
     );
   }
 
-  const indicator =
-    meta.indicators.find((i) => i.code === params.indicator) ?? meta.indicators[0];
+  // A saved view's settings come from the database, not the URL.
+  if (sp.view !== undefined && !activeView) {
+    return (
+      <ViewProblem title="This saved view no longer exists.">
+        It may have been deleted. Pick another view from the home page or{" "}
+        <Link href="/dashboard" className="underline underline-offset-4">
+          open the default dashboard
+        </Link>
+        .
+      </ViewProblem>
+    );
+  }
+  const params = activeView ? savedViewToParams(activeView) : parseParams(sp);
+
+  const savedIndicator = meta.indicators.find((i) => i.code === params.indicator);
+  if (activeView && !savedIndicator) {
+    return (
+      <ViewProblem title={`The saved view "${activeView.name}" can't be shown.`}>
+        It uses the indicator <code className="font-mono">{activeView.indicator}</code>, which is no longer in the
+        database. You can delete the view from the{" "}
+        <Link href="/dashboard" className="underline underline-offset-4">
+          dashboard
+        </Link>
+        .
+      </ViewProblem>
+    );
+  }
+  const indicator = savedIndicator ?? meta.indicators[0];
   const yearRange = indicator.yearRange ?? { min: 1960, max: meta.dashboardSummary.latestYear };
   const year = params.year ?? indicator.latestYear ?? yearRange.max;
   const yearOptions = Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, i) => yearRange.max - i);
@@ -94,6 +137,20 @@ export default async function DashboardPage({ searchParams }: PageProps) {
         <StatTile label="Countries" value={String(summary.countries)} caption="Aggregates excluded" />
         <StatTile label="Latest data" value={String(summary.latestYear)} caption="Across all indicators" />
       </div>
+
+      {activeView && (
+        <p className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900">
+          Viewing saved view <span className="font-semibold">{activeView.name}</span>
+          <span className="opacity-70"> · changing any setting leaves the view</span>
+        </p>
+      )}
+
+      <SavedViews
+        views={savedViews.map(({ id, name }) => ({ id, name }))}
+        activeViewId={activeView?.id ?? null}
+        current={{ indicator: indicator.code, year, countries: params.countries, order: params.order, region: params.region }}
+        exitHref={`/dashboard?${toSearchParams({ ...params, indicator: indicator.code, year })}`}
+      />
 
       <Suspense>
         <Controls
@@ -183,6 +240,17 @@ export default async function DashboardPage({ searchParams }: PageProps) {
           <GdpLifeScatter points={scatterPoints} highlightRegion={params.region} />
         )}
       </ChartCard>
+    </main>
+  );
+}
+
+function ViewProblem({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <main className="mx-auto w-full max-w-6xl px-6 py-16">
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+        <p className="font-medium">{title}</p>
+        <p className="mt-1">{children}</p>
+      </div>
     </main>
   );
 }

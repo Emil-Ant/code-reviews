@@ -1,5 +1,6 @@
 import { createSchema } from "graphql-yoga";
-import type { Prisma } from "@prisma/client";
+import { GraphQLError } from "graphql";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./db.js";
 
 export const typeDefs = /* GraphQL */ `
@@ -107,6 +108,36 @@ export const typeDefs = /* GraphQL */ `
     DESC
   }
 
+  "A named dashboard configuration. Saved views are shared by everyone using the app."
+  type SavedView {
+    id: Int!
+    "Unique display name, 1-60 characters."
+    name: String!
+    "Code of the indicator shown. It may no longer exist in the database."
+    indicator: String!
+    "Year used for the ranking and regional charts."
+    year: Int!
+    "ISO3 codes of the countries on the line chart, in display order."
+    countries: [String!]!
+    "Ranking order."
+    order: SortOrder!
+    "Region highlighted on the GDP vs life expectancy chart, or null for none."
+    region: String
+    createdAt: String!
+  }
+
+  "Everything needed to recreate a dashboard configuration."
+  input SavedViewInput {
+    "Display name. Trimmed and first letter capitalised; must be 1-60 characters and not match an existing view (ignoring case)."
+    name: String!
+    indicator: String!
+    year: Int!
+    "1 to 8 ISO3 country codes."
+    countries: [String!]!
+    order: SortOrder!
+    region: String
+  }
+
   type Query {
     "Simple health-check style query that does not touch the database."
     hello: String!
@@ -156,11 +187,23 @@ export const typeDefs = /* GraphQL */ `
     Countries with no value for any of the indicators are omitted.
     """
     countrySnapshot(indicatorCodes: [String!]!, year: Int!): [CountrySnapshot!]!
+
+    "Saved dashboard views, newest first. Pass limit to get only the most recent few."
+    savedViews(limit: Int): [SavedView!]!
+
+    "A single saved view by id, or null if it has been deleted."
+    savedView(id: Int!): SavedView
   }
 
   type Mutation {
     "Store a new greeting in the database and return it."
     addGreeting(message: String!): Greeting!
+
+    "Save the current dashboard configuration under a name. Fails with a readable message if the name is invalid or taken."
+    createSavedView(input: SavedViewInput!): SavedView!
+
+    "Delete a saved view. Returns false if it did not exist."
+    deleteSavedView(id: Int!): Boolean!
   }
 `;
 
@@ -183,6 +226,70 @@ async function latestYearWithCoverage(indicatorCode: string, minCountries = 100)
     orderBy: { year: "desc" },
   });
   return rows.find((r) => r._count._all >= minCountries)?.year ?? null;
+}
+
+const SAVED_VIEW_NAME_MAX = 60;
+const SAVED_VIEW_MAX_COUNTRIES = 8;
+
+type SavedViewInput = {
+  name: string;
+  indicator: string;
+  year: number;
+  countries: string[];
+  order: "ASC" | "DESC";
+  region?: string | null;
+};
+
+/** A user-facing validation error. Yoga masks plain Errors, but passes GraphQLError messages through. */
+function badInput(message: string): GraphQLError {
+  return new GraphQLError(message, { extensions: { code: "BAD_USER_INPUT" } });
+}
+
+function duplicateName(name: string): GraphQLError {
+  return badInput(`A saved view called "${name}" already exists. Choose a different name.`);
+}
+
+async function createSavedView(input: SavedViewInput) {
+  const trimmed = input.name.trim();
+  if (!trimmed) throw badInput("Give the view a name.");
+  // Capitalise the first letter only, so acronyms and the rest of the name stay as typed.
+  const name = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  if (name.length > SAVED_VIEW_NAME_MAX) {
+    throw badInput(`Names can be at most ${SAVED_VIEW_NAME_MAX} characters (this one has ${name.length}).`);
+  }
+
+  const indicator = input.indicator.trim();
+  if (!indicator) throw badInput("A saved view needs an indicator.");
+  if (!Number.isInteger(input.year) || input.year <= 0) throw badInput("Year must be a positive whole number.");
+
+  const countries = input.countries.map((c) => c.trim().toUpperCase());
+  if (countries.length === 0 || countries.length > SAVED_VIEW_MAX_COUNTRIES) {
+    throw badInput(`A saved view needs between 1 and ${SAVED_VIEW_MAX_COUNTRIES} countries.`);
+  }
+  if (countries.some((c) => !/^[A-Z]{3}$/.test(c))) throw badInput("Countries must be ISO3 codes such as GBR.");
+
+  // SQLite's unique index is case-sensitive; treat "GDP" and "gdp" as the same name.
+  const clash = await prisma.$queryRaw<{ id: number }[]>`
+    SELECT id FROM "SavedView" WHERE lower(name) = lower(${name}) LIMIT 1
+  `;
+  if (clash.length) throw duplicateName(name);
+
+  try {
+    return await prisma.savedView.create({
+      data: {
+        name,
+        indicator,
+        year: input.year,
+        countries: countries.join(","),
+        order: input.order,
+        region: input.region?.trim() || null,
+      },
+    });
+  } catch (err) {
+    // Backstop for two saves racing past the check above.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") throw duplicateName(name);
+    throw err;
+  }
 }
 
 const POPULATION = "SP.POP.TOTL";
@@ -324,6 +431,14 @@ export const resolvers = {
       }
       return [...byCountry.values()];
     },
+
+    savedViews: async (_p: unknown, args: { limit?: number | null }) =>
+      prisma.savedView.findMany({
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        ...(args.limit != null ? { take: Math.max(args.limit, 0) } : {}),
+      }),
+
+    savedView: async (_p: unknown, args: { id: number }) => prisma.savedView.findUnique({ where: { id: args.id } }),
   },
 
   Mutation: {
@@ -334,6 +449,18 @@ export const resolvers = {
       }
       return prisma.greeting.create({ data: { message } });
     },
+
+    createSavedView: async (_p: unknown, args: { input: SavedViewInput }) => createSavedView(args.input),
+
+    deleteSavedView: async (_p: unknown, args: { id: number }) => {
+      const { count } = await prisma.savedView.deleteMany({ where: { id: args.id } });
+      return count > 0;
+    },
+  },
+
+  SavedView: {
+    countries: (parent: { countries: string }) => parent.countries.split(",").filter(Boolean),
+    createdAt: (parent: { createdAt: Date }) => parent.createdAt.toISOString(),
   },
 
   Greeting: {
